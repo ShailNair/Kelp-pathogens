@@ -1,0 +1,1018 @@
+
+
+```{r}
+# Load required packages
+library(ggplot2)
+library(gridExtra)
+library(ggcorrplot)
+library(corrgram)
+library(corrplot)
+library(ggstatsplot)
+library(randomForest)
+library(DESeq2)
+library (reshape2)
+library(ggpubr)
+library(dplyr)
+library(metagenomeSeq)
+library(ALDEx2)
+library(pheatmap)
+library(viridis)
+library(hrbrthemes)
+library(ggsci)
+
+
+
+set.seed(123)
+```
+
+
+
+```{r}
+# Read data
+data.transp <- read.table(file='C:/kelp/data/clarity.txt', header = T, sep = "\t")
+
+#to calculate standard error by dividing with sapmple size
+#3 is the sample size for each reading
+#data.transp$se <- data.transp$std.dev / sqrt(3)
+
+ ggplot(data.transp, aes(x = label, y = mean)) +
+  geom_ribbon(aes(ymin = ci_low, ymax = ci_upper), fill = "#e8a0a2", alpha = 0.3) +
+  geom_line(size = 1.2, color = "#cb4949") +
+  geom_errorbar(aes(ymin = mean - SE, ymax = mean + SE), width = 0.2, size = 0.7) +
+  geom_point(size = 2.5, color = "black") +
+  geom_hline(yintercept = c(100, 200, 300, 400), linetype = "dotted", alpha = 0.5) +
+  labs(title = "Mean Seawater Transparency", y = "Transparency", x = "Month") +
+  scale_x_continuous(breaks = data.transp$label) +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+
+# Save plot to PDF 
+#ggsave(file = "C:/kelp/transparency.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+
+```
+
+
+```{r}
+cor.data <- read.table(text="transparency	NH4	N03	NO2	P04	Temp	DO	PH	Kelp.health
+183.33	2.523333333	13.46356359	1.813333333	0.293333333	21.06666667	8.296666667	8.076666667	1
+97.00	2.29	15.95893945	1.203333333	0.466666667	15.43333333	9.48	8.063333333	1
+67.67	2.433333333	14.34765685	0.983333333	0.723333333	9.433333333	11.20333333	8.086666667	1
+37.00	2.83	14.39895236	0.786666667	0.85	5.366666667	12.98666667	8.013333333	1
+41.00	1.596666667	15.23778488	1.26	0.403333333	5.1	13.98333333	7.996666667	1
+106.33	1.203333333	18.3849155	0.746666667	0.5	7.233333333	13.48333333	8.026666667	1
+92.33	0.586666667	11.0979352	0.606666667	0.163333333	10.66666667	12.77333333	8.033333333	1
+136.67	3.296666667	16.54666667	1.43	0.18	21.76666667	8.076666667	8.1	1
+178.33	4.556666667	7.301369863	0.656666667	0.13	17.6	8.076666667	8.033333333	1
+133.33	2.163333333	6.841324201	0.32	0.373333333	12.47	7.846666667	8.053333333	1
+90.00	5.346666667	4.369863014	1	0.293333333	6	12.08	8.05	1
+39.00	2.666666667	5.551369863	0.426666667	0.166666667	3.343333333	10.77	8.006666667	1
+59.33	3.3	6.349315068	0.166666667	0.166666667	3.67	10.14	8.053333333	1
+88.33	1.833333333	6.461187215	0.31	0.15	6.213333333	9.04	8.073333333	1
+93.33	2.475555556	3.906392694	0.403333333	0.433333333	10.70666667	8.453333333	8.063333333	1
+121.67	3.21	9.333333333	0.876666667	0.53	17.68333333	6.353333333	8.093333333	1
+120.67	2.82	4.696666667	0.583333333	0.343333333	14.81333333	7.856666667	8.086666667	1
+171.67	2.665	6.7	0.285	0.345	9.056666667	8.256666667	8.14	1
+190.00	3.246666667	4.423333333	0.18	0.213333333	6.306666667	9.883333333	8.103333333	0
+330.00	2.676666667	3.663333333	0.126666667	0.22	4.906666667	10.05666667	8.093333333	0
+178.33	3.38	4.076666667	0.2	0.183333333	4.866666667	10.07	8.026666667	0
+", header = T, sep = "\t")
+
+# Create dataframe
+
+#standerdize the data for variable scale/unit
+cor.data_scaled <- as.data.frame(scale(cor.data))
+
+
+# Correlation analysis
+cor_mat <- cor(cor.data_scaled)
+p_mat <- cor_pmat(cor.data_scaled)
+
+#save correlation table
+
+write.csv(cor_mat, "C:/kelp/correlation_matrix.csv", row.names = TRUE)
+
+# Heatmap of correlation
+
+ggcorrplot(cor_mat, hc.order = TRUE, type = "lower", lab = TRUE, lab_size = 3, 
+           title = "Correlation heatmap", ggtheme = ggplot2::theme_gray)
+
+
+
+# Calculate p-values for correlations
+p_mat <- cor.mtest(cor.data_scaled)$p
+
+p_mat <- cor.mtest(cor.data_scaled,
+         method = c("pearson"),
+        conf.level = 0.95)
+
+# Save p-values to a CSV file
+write.csv(p_mat, "C:/kelp/correlation_p.values.csv", row.names = FALSE)
+
+
+# Set significance level
+sig_level <- 0.05
+
+# Plot correlation heatmap with significance values
+p2 <- ggcorrplot(cor_mat, hc.order = TRUE, type = "lower", lab = TRUE, lab_size = 3, 
+           title = "Correlation heatmap with significance values", ggtheme = ggplot2::theme_gray,
+           p.mat = p_mat, sig.level = sig_level)
+
+
+
+ggsave(file = "C:/kelp/correlation heatmap.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (p2)
+
+```
+
+
+
+```{r}
+# Create scatterplot with line of best fit and correlation statistics
+p3 <- ggscatter(cor.data_scaled, x = "transparency", y = "Kelp.health", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Seawater transparency (Cms.)",
+          ylab = "Kelp health",
+          main = "Correlation between Seawater transparency  and Kelp health",
+          font.label = list(size = 14, color = "black", face = "bold"),
+          font.main = list(size = 16, color = "black", face = "bold"),
+          font.legend = list(size = 12, color = "black", face = "bold"),
+          palette = "jco",
+          legend.title = "Correlation Coefficient",
+          legend.values = "pearson",
+          legend.position = "top",
+          legend.box = "horizontal",
+          theme = ggpubr::theme_pubclean())
+
+
+ggsave(file = "C:/kelp/transparancy.correlation scatterplot.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (p3)
+
+```
+
+
+```{r}
+#deseq2
+# Read in the genus abundance table
+abund_table <- read.csv("~/differential/hkt.ukt.genera.abund.csv", row.names = 1)
+# Read in the metadata table
+metadata <- read.csv("~/differential/metadata.csv", row.names = 1)
+# Subset the data for HKT and UKT samples
+hkt_samples <- colnames(abund_table)[grep("HKT", colnames(abund_table))]
+ukt_samples <- colnames(abund_table)[grep("UKT", colnames(abund_table))]
+abund_subset <- abund_table[, c(hkt_samples, ukt_samples)]
+
+# Perform differential abundance analysis using DESeq2
+
+dds <- DESeqDataSetFromMatrix(countData = abund_subset, colData = metadata, design = ~/ group)
+dds <- DESeq(dds)
+
+# Extract the differential abundance results
+res <- results(dds)
+
+# Filter for significantly differentially abundant genera
+sig_genera <- rownames(res)[which(res$padj < 0.05 & abs(res$log2FoldChange) > 1)]
+
+write.csv(res, "~/differential/sig_genera.deseq.res.csv", row.names = TRUE)
+
+# Subset the abundance table for significantly differentially abundant genera
+abund_sig <- abund_subset[sig_genera,]
+# Save significantly differentially abundant genera to a CSV file
+#write.csv(abund_sig, "~/differential/hkt.ukt.sig.abund.csv", row.names = TRUE)
+#write.csv(metadata, "~/differential/metadata.csv", row.names = TRUE)
+
+group <- metadata["group"]
+
+# run randomForest model
+rf_model <- randomForest(group ~/ ., data = abund_sig, importance = TRUE)
+
+
+# Visualize the variable importance of the genera in the model
+varImpPlot(rf_model)
+
+# Output the significant genera and their statistical significance
+cat("Significantly differentially abundant genera:\n")
+for (genus in sig_genera) {
+  cat(paste(genus, "p =", res$padj[genus], "\n"))
+}
+
+```
+
+#DIFFRENTIAL ANALYSIS USING microeco-ALDEX2
+
+```{r}
+#use microeco package
+#abund and sample files with filename
+abund_file_name <- "hkvuk.txt"
+sample_file_name <- "metadata.txt"
+
+#abund and sample file paths
+abund_file_path <- file.path(file_dir, abund_file_name)
+sample_file_path <- file.path(file_dir, sample_file_name)
+
+#create r6 object
+mc <- mpa2meco(abund_file_path, sample_table = sample_file_path)
+
+# make uniform taxonomy and asv
+mc$tidy_dataset()
+
+# create a clone
+mc1 <- clone(mc)
+
+# occurrence frequency 0.1; 10% samples have the target features
+mc1$filter_taxa(rel_abund = 0.0001, freq = 0.1)
+
+# Centered log-ratio normalization
+#mc_clr <- trans_norm$new(dataset = mc1)
+#mc_clr <- mc_clr$norm(method = "CLR")
+
+
+#differential analysis
+# ALDEx2_kw Kruskal-Wallace and generalized linear model (glm) test
+t1 <- trans_diff$new(dataset = mc1, method = "ALDEx2_kw", group = "Group", taxa_level = "Species",alpha = 0.05)
+
+t1$plot_diff_abund(use_number = 1:15, group_order = c("HKT", "UKT"))
+
+p1_file <- t1$plot_diff_abund(use_number = 1:15, group_order = c("HKT", "UKT"), add_sig = TRUE)
+
+#plot filename
+plot_file_name <- "aldex_top15.pdf"
+#plot file path
+plot_file_path <- file.path(file_dir, plot_file_name)
+
+#plot
+ggsave(plot = p1_file, filename = plot_file_path, device = "pdf", width = 60, height = 30, scale = 1, units = "cm", dpi = 320)
+
+print (p1_file)
+
+#save results to table
+output_file <- file.path(file_dir, "aldex.res_diff.csv")
+
+# write the data frame to a CSV file
+write.csv(t1[["res_diff"]], file = output_file, row.names = FALSE)
+
+```
+```{r}
+t2 <- trans_diff$new(dataset = mc1, method = "ALDEx2_t", group = "Group", taxa_level = "Genus")
+
+
+t2$plot_diff_abund(use_number = 1:15, group_order = c("HKT", "UKT"))
+
+t2$plot_diff_abund(use_number = 1:15, group_order = c("HKT", "UKT"), add_sig = TRUE)
+
+
+#save results to table
+output_file <- file.path(file_dir, "aldex.tres_diff.csv")
+
+# write the data frame to a CSV file
+write.csv(t2[["res_diff"]], file = output_file, row.names = FALSE)
+
+
+```
+
+
+
+```{r}
+data <- read.table(text="Taxa	HKT	UKT	SW
+Campylobacterales	0.000280996	0.001645184	0.060568155
+Caulobacterales	0.302908758	0.009395225	0.002587879
+Enterobacterales	0.008429869	0.126797013	0.280166241
+Flavobacteriales	0.32732815	0.32681605	0.1631406
+Granulosicoccales	0.019230072	0.003059227	0.000856583
+Not_Assigned	0.010211019	0.109166803	0.010976959
+Others	0.028081435	0.032681605	0.05802107
+Pseudomonadales	0.171633945	0.141490365	0.081117095
+Rhizobiales	0.008330161	0.010673302	0.000788601
+Rhodobacterales	0.11238466	0.232641725	0.275416505
+Thiotrichales	0.011180907	0.005633509	0.066360291
+", header = T, sep = "\t")
+
+# Set the fill colors for the pie charts
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "#393b79")
+
+
+# Convert dataframe from wide to long format
+data_long <- gather(data, variable, value, -Taxa)
+
+# Combine pie charts using facet_wrap
+# Combine pie charts using facet_wrap
+p4 <- ggplot(data_long, aes(x="", fill=Taxa)) +
+  geom_bar(aes(y=value, group = Taxa), stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  facet_wrap(~/ variable, nrow = 1) +
+  theme_void() +
+  scale_fill_manual(values = colors) +
+  labs(fill = "Taxa", x = NULL, y = NULL)
+
+#save plot
+ggsave(file = "~/orders.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (p4)
+```
+
+
+
+```{r}
+
+amr <- read.table(file='~/metagenomics/0.1.new/0.6.functions/amr.kelp.txt', header = T, sep = "\t")
+
+# Melt data into long format
+data_long <- melt(amr, id.vars="type", variable.name="Type", value.name="AMR")
+
+
+# Calculate significance between HKT and UKT
+pvalue <- wilcox.test(AMR ~/ Type, data=data_long[data_long$Type %in% c("HKT", "UKT"),])$p.value
+sig <- ifelse(pvalue < 0.05, "*", " ")
+
+# Create boxplot with jitters and significance asterisks
+p4 <- ggplot(data_long, aes(x=Type, y=AMR, fill=Type)) +
+  geom_boxplot() +
+  geom_jitter(width=0.15, alpha=0.5) +
+  stat_compare_means(aes(group=Type), method="wilcox.test", label="p.format",
+                     label.x = 2, label.y = 0.1, show.legend=FALSE) +
+  labs(x="Type", y="AMR abundance (TPM)", fill="Type") +
+  scale_y_log10() +
+  scale_x_discrete(guide = guide_axis(n.dodge=2)) +
+  annotate("text", x=2, y=0.15, label=sig, size=8) +
+  theme_minimal() +
+  theme(legend.position="none")
+
+
+#save plot
+ggsave(file = "~/metagenomics/0.1.new/0.6.functions/amr.kelp.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (p4)
+
+
+```
+
+```{r}
+#load data
+cb.data <- read.table(text="Subclass	Group	mean	sd	se
+AMINOGLYCOSIDE	HKT	0.002399113	0.003392857	0.002399113
+BETA-LACTAM	HKT	0.771339201	0.205394572	0.145235895
+CARBAPENEM	HKT	0.006239968	0.008824647	0.006239968
+CHLORAMPHENICOL	HKT	0.007085799	0.010020832	0.007085799
+ERYTHROMYCIN	HKT	0.002739491	0.003874225	0.002739491
+FOSFOMYCIN	HKT	0.049067744	0.039841664	0.028172311
+GENTAMICIN	HKT	0.014835486	0.020980546	0.014835486
+KANAMYCIN	HKT	0.009480082	0.004864511	0.003439729
+LINCOSAMIDE	HKT	0.007485774	0.00204584	0.001446628
+MACROLIDE	HKT	0.013080884	0.018499163	0.013080884
+QUINOLONE	HKT	0.007197338	0.010178572	0.007197338
+RIFAMYCIN	HKT	0	0	0
+STREPTOGRAMIN	HKT	0	0	0
+STREPTOMYCIN	HKT	0.010508523	0.000682158	0.000482358
+SULFONAMIDE	HKT	0.004585725	0.001177795	0.000832827
+TETRACYCLINE	HKT	0.037518094	0.001393881	0.000985623
+TRIMETHOPRIM	HKT	0	0	0
+AMINOGLYCOSIDE	UKT	0.008147371	0.011522122	0.008147371
+BETA-LACTAM	UKT	10.80570107	2.594163754	1.834350782
+CARBAPENEM	UKT	0.566316764	0.153577964	0.10859602
+CHLORAMPHENICOL	UKT	0.048277285	0.035601572	0.025174113
+ERYTHROMYCIN	UKT	0	0	0
+FOSFOMYCIN	UKT	0.150332159	0.007534044	0.005327374
+GENTAMICIN	UKT	0.011099908	0.004407507	0.003116578
+KANAMYCIN	UKT	0.00949921	0.013433911	0.00949921
+LINCOSAMIDE	UKT	0.0068363	0.009667987	0.0068363
+MACROLIDE	UKT	0.030974887	0.005095532	0.003603086
+QUINOLONE	UKT	0.005431581	0.007681415	0.005431581
+RIFAMYCIN	UKT	0.008709349	0.000214506	0.000151679
+STREPTOGRAMIN	UKT	0.005820915	0.008232017	0.005820915
+STREPTOMYCIN	UKT	0.046966465	0.026334914	0.018621596
+SULFONAMIDE	UKT	0.008991802	0.012716328	0.008991802
+TETRACYCLINE	UKT	0.167817035	0.116841144	0.082619166
+TRIMETHOPRIM	UKT	0.483608835	0.235945735	0.16683883
+", header = T, sep = "\t")
+
+# calculate p-values for the difference between HKT and UKT for each subclass
+pvalues <- cb.data %>% 
+  pivot_wider(names_from = Group, values_from = mean) %>% 
+  mutate(p = t.test(HKT, UKT)$p.value) %>% 
+  select(Subclass, p)
+
+# create bar plots with error bars and p-values for each subclass
+# Set the plot width and height
+plot_width <- 12
+plot_height <- 6
+
+# Create the plot
+pt <- ggplot(cb.data, aes(x = Group, y = mean, fill = Group)) +
+  geom_bar(stat="identity", position=position_dodge(), width=0.7) +
+  geom_errorbar(aes(ymin=mean-se, ymax=mean+se), 
+                width=.2, position=position_dodge(.9))+
+  facet_wrap(~/ Subclass, scales = "free") +
+  labs(y = "Mean TPM abundance") +
+  theme_bw()
+
+ggsave(file = "~/metagenomics/0.1.new/0.6.functions/amr/subclass.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+print (pt)
+
+#t-test
+# define the data
+HKT <- c(0.916575096, 0.626103306)
+UKT <- c(12.64005185, 8.971350287)
+
+# perform a t-test
+t.test(HKT, UKT)
+
+```
+
+
+```{r}
+hld <- read.table(text="Type	mean	sd	se
+HKT	0	0	0
+HKS	0	0	0
+UKT	0.025660058	0.036288803	0.025660058
+UKS	0.098574966	0.081045932	0.057308128
+SW	0.122071766	0	0"
+, header = T, sep = "\t")
+
+# Calculate significance between HKT and UKT
+pvalue <- wilcox.test(hld$mean[hld$Type == "HKT"], hld$mean[hld$Type == "UKT"])$p.value
+
+if (pvalue < 0.001) {
+  sig <- "***"
+} else if (pvalue < 0.01) {
+  sig <- "**"
+} else if (pvalue < 0.05) {
+  sig <- "*"
+} else {
+  sig <- ""
+}
+
+# Convert Type to factor
+hld$Type <- factor(hld$Type)
+
+# Define color palette
+my_colors <- c("#A6CEE3", "#1F78B4", "#B2DF8A", "#33A02C", "#FB9A99")
+
+# Create barplot
+p5 <- ggplot(hld, aes(x=mean, y=Type, fill=Type)) +
+  geom_col(alpha=0.8) +
+  scale_fill_manual(values=my_colors) +
+  geom_errorbar(aes(xmin=mean-se, xmax=mean+se, width=0.1), color="black", size=1) +
+  labs(y=NULL, x="AMR-DH abundance (TPM)") +
+  theme(legend.position="none")
+#save plot
+ggsave(file = "~/metagenomics/0.1.new/0.6.functions/amr.HLD.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (p5)
+
+
+```
+
+
+```{r}
+#significantly different pathways
+
+# Read in data from file
+data <- read.table("~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.rawcount.sum.txt", header = TRUE)
+rownames(data) <- data[,1]
+#remove extra column
+data$pathway_id <- NULL
+#create metadata
+metadata <- data.frame(sample = colnames(data), condition = c(rep("control", 2), rep("disease", 2)))
+rownames(metadata) <- metadata$sample
+
+
+#create deseq object
+dds <- DESeqDataSetFromMatrix(countData = data, colData = metadata, design = ~/ condition)
+
+#run deseq2
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("condition", "disease", "control"))
+res <- res[order(res$pvalue), ]
+#sort according to p-value
+res_complete <- res[!is.na(res$padj), ]
+res_sig <- res_complete[res_complete$padj < 0.05, ]
+
+#save results
+write.csv(res, "~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.rawcount.deseq.results.csv", row.names = TRUE)
+
+
+write.csv(res_sig, "~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.rawcount.deseq.results.0.05.csv", row.names = TRUE)
+
+
+# Sort the results based on p-value and select only the top 30 significant pathways
+res_top50 <- res_sig[order(res_sig$padj), ][1:50, ]
+#save top 50
+write.csv(res_top50, "~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.top50.csv", row.names = TRUE)
+
+
+#change name of first column to pathway_id, then
+res_top50 <- read.csv("~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.top50.csv", header = TRUE)
+rownames(res_top50) <- res_top50[,1]
+
+
+# Plot the heatmap with asterisks
+
+pdf("~/metagenomics/0.1.new/0.6.functions/HKTVSUKT.pathway.top50.pdf", width = 14, height = 14)
+pheatmap(data[res_top50[, "pathway_id"], ], scale = "row",
+         cluster_rows = TRUE, cluster_cols = FALSE,
+         fontsize_row = 8, fontsize_col = 12,
+         fontsize = 10, border_color = "white",
+         cellwidth = 20, cellheight = 10)
+dev.off()
+
+```
+
+
+#catogorise p-values into asterisk
+```{r}
+# Read the data into a data frame
+data <- read.table("~/metagenomics/0.1.new/0.6.functions/top50.pvalue.txt", header=TRUE)
+sig_levels <- c(0.05, 0.01, 0.001)
+
+# Categorize the p-values and add asterisks
+#-Inf is negative infinity i.e., any value smaller than 0.001 (sig_levels)
+#Inf is positive infinity i.e., any value greater than 0.05 (sig_levels)
+
+data$sig <- cut(data$padj, breaks=c(-Inf, sig_levels, Inf), labels=c("****", "*", "**", "***"))
+
+# Print the modified data frame
+write.table(data, "~/metagenomics/0.1.new/0.6.functions/top50.asterisks.txt")
+
+```
+
+
+
+
+```{r}
+
+#data
+data <- read.table(text="Gene	HKT	HKS	UKT	UKS	SW
+plc	0.015100408	0.95757124	0.762377568	2.997435126	0.846313328
+tlyC	4.617514391	81.7007571	25.22674678	73.77700636	174.6061413
+slo	0.027762037	0.578145752	0.561358633	6.335366121	0.392019134
+hld	0	0	0.025660058	0.040836976	0.122071766
+cfa	0.011771463	0.248795722	0.068754852	0.177837484	0.050269039
+cylE	0.001290583	0.102256984	0.005355733	0.018041464	0.015392587
+hlyIII	0.659460065	14.89088963	18.60566769	32.80831376	65.06647814
+hlyE	0.008010033	0.048820015	0.006693928	0.031959372	0.063689617
+eta	0	0.046298304	0.046298304	0.046298304	0.322813712", header = T, sep = "\t")
+#format
+rownames(data) <- data[,1]
+data <- data[, -1]
+
+
+# Create the heatmap with pheatmap
+pheatmap(data,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         scale = "row")
+pdf("~/metagenomics/0.1.new/0.6.functions/typ2.toxins.pdf", width = 14, height = 14)
+pheatmap(data,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         scale = "row")
+dev.off()
+
+```
+```{r}
+data <- read.table(text="group	HKT	HKS	UKT	UKS	SW
+PL	0.853402336	14.78954674	34.23851566	30.98246241	19.13607285
+GT	1.207491079	24.71871498	11.58338152	28.40460627	34.08580614
+GH	0.982363095	21.86214913	13.37354914	26.83714825	36.94479039
+AA	1.688622434	25.02802151	10.4842987	21.63139879	41.16765856
+CBM	0.877214409	19.98903642	26.95177331	24.90573314	27.27624273
+CE	1.206799479	24.11883279	10.63423929	27.66946777	36.37066067
+", header = T, sep = "\t")
+
+rownames(data) <- data[,1]
+data <- data[, -1]
+
+
+# Create the heatmap 
+pdf("~/metagenomics/0.1.new/0.6.functions/cazy/cazy.pdf", width = 14, height = 14)
+pheatmap(data,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         scale = "row")
+dev.off()
+
+```
+
+#FIND DIFFERENTIAL CAZY GENES
+```{r}
+
+# Read in the genus abundance table
+abund_table <- read.table("~/metagenomics/0.1.new/0.6.functions/cazy/kelp.cazy_HK.UK.txt", row.names = 1, header=TRUE)
+# Read in the metadata table
+metadata <- read.table("~/metagenomics/0.1.new/0.6.functions/cazy/metadata.txt", row.names = 1, header=TRUE)
+
+
+# Perform differential abundance analysis using DESeq2
+
+dds <- DESeqDataSetFromMatrix(countData = abund_table, colData = metadata, design = ~/ group)
+dds <- DESeq(dds)
+
+# Extract the differential abundance results
+res <- results(dds)
+# Filter rows with adjusted p-value <= 0.05
+filtered_res <- res[!is.na(res$padj) & res$padj <= 0.05, ]
+
+
+write.csv(filtered_res, "~/metagenomics/0.1.new/0.6.functions/cazy/sig_CAZY.deseq.res.csv", row.names = TRUE)
+```
+
+#plot differentially abundant PLs
+```{r}
+
+data <- read.table("~/metagenomics/0.1.new/0.6.functions/cazy/PL.tpm.txt", header=TRUE)
+
+
+rownames(data) <- data[,1]
+data <- data[, -1]
+
+pdf("~/metagenomics/0.1.new/0.6.functions/cazy/pl.pdf", width = 14, height = 14)
+pheatmap(data,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         scale = "row",
+         fontsize_col = 8,
+         fontsize_row = 10,
+         cellwidth = 30,
+         cellheight = 12,
+         border_color = "gray",
+         border = TRUE,
+         legend = TRUE,
+         legend_title = "Z-score",
+         legend_labels = c("Low", "High"),
+         annotation_colors = list(row = c("black", "white")),
+         annotation_legend_title = "P-values",
+         annotation_legend_colors = c("black", "white"),
+         annotation_names_row = TRUE,
+         annotation_name_rot = 45,
+         annotation_name_col = NULL)
+dev.off()
+
+```
+
+
+
+
+```{r}
+# Read the data into a data frame
+#orders with more than 3 bins retained
+data <- read.table("~/metagenomics/0.1.new/0.4.binning/grodon/results/order.dtime.txt", header=TRUE)
+
+
+#SUMMARIZE
+stat_box_data <- function(y, upper_limit = 12 * 1.15) #upper limit value is foer the position of the text
+  {
+  return( 
+    data.frame(
+      y = 0.95 * upper_limit,
+      label = paste('count =', length(y), '\n',
+                    'mean =', round(mean(y), 1), '\n')
+    )
+  )
+}
+
+# Create the grouped boxplot
+# Manually define a set of 13 distinct colors
+color_palette <- c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a", "#b15928", "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6", "#ffff99", "#636363")
+
+# Modify the ggplot code
+plot1 <- ggplot(data, aes(x = Order, y = mean_Doubling_time, fill = Order)) +
+  geom_boxplot() +
+  labs(x = "Order", y = "Mean Doubling Time") +
+  geom_boxplot(outlier.shape = NA) +
+  coord_cartesian(ylim = c(0.5, 13)) +
+  geom_jitter(width = 0.15, alpha = 0.5) +
+  stat_summary(
+    fun.data = stat_box_data,
+    geom = "text",
+    hjust = 0.5,
+    vjust = 0.9,
+    color = "black",
+    size = 2
+  ) +
+  theme_bw() +
+  theme(axis.line = element_line(color = "black")) +
+  scale_fill_manual(values = color_palette)
+#save plot
+ggsave(file = "~/metagenomics/0.1.new/0.4.binning/grodon/results/order.d-time.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+```
+
+
+
+```{r}
+
+dt <- read.table(text="genus	mean_Doubling_time	LowerCI	UpperCI
+Paraglaciecola	8.563452921	6.436851906	11.65271794
+Cognaticolwellia	7.938648598	6.164509398	10.3651086
+Psychromonas	4.513886966	3.717115092	5.528067753
+Colwellia	3.918613127	3.359572719	4.590742556
+Pseudocolwellia	3.723582019	3.253829894	4.272739936
+Glaciecola	3.068022027	2.681099836	3.521144434
+Pseudoalteromonas	2.362806059	2.049591498	2.734289952", header = T, sep = "\t")
+
+# Reorder the bin based on Doubling_time in ascending order
+dt$bin <- reorder(dt$genus, dt$mean_Doubling_time)
+
+# Create the bar plot
+plot2 <- ggplot(dt, aes(x = genus, y = mean_Doubling_time, fill = genus)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "genus", y = "Doubling Time", fill = "Genus") +
+  theme_bw()
+
+# Add error bars
+plot2 <- plot2 + geom_errorbar(aes(ymin = LowerCI, ymax = UpperCI), width = 0.2, position = "dodge")
+
+# Rotate x-axis labels
+plot2 <- plot2 + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+#save
+ggsave(file = "~/metagenomics/0.1.new/0.4.binning/grodon/results/entero.bins.d-time.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (plot2)
+```
+
+#plasmid
+```{r}
+pl <- read.table(text="pathway_id	Enterobacterales	Pseudomonadales	Flavobacteriales	Rhodobacterales	Opitutales
+ko00051	1	0	0	0	0
+ko00260	1	0	0	0	0
+ko00330	0	0	0	0	1
+ko02010	0	0	0	1	0
+ko03070	1	0	0	1	1
+ko02024	1	0	0	0	0
+ko02040	1	0	0	0	0
+ko02035	1	0	0	1	1
+ko01501	1	1	0	0	0
+ko02048	1	0	0	0	0", header = T, sep = "\t")
+
+
+#format
+rownames(pl) <- pl[,1]
+pl <- pl[, -1]
+
+
+# Create the heatmap with pheatmap
+
+pdf("~/metagenomics/0.1.new/0.4.binning/0.7.bin.func/plasmid/bin.plasmid.annotate/plasmid.pathway.pdf", width = 14, height = 14)
+pheatmap(pl,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         border_color = "black",
+         color = hcl.colors(100, "BluYl"))
+dev.off()
+
+```
+
+```{r}
+
+pl.gc <- read.table(text="order	GC
+Enterobacterales	40.95454545
+Enterobacterales	42.05682273
+Enterobacterales	39.32419197
+Enterobacterales	39.88127361
+Enterobacterales	41.03126714
+Enterobacterales	42.00743494
+Rhodobacterales	40.75072185
+Rhodobacterales	38.53658537
+Rhodobacterales	38.33124216
+Rhodobacterales	37.33933162
+Enterobacterales	49.40239044
+Enterobacterales	38.71165644
+Enterobacterales	45.55651424
+Enterobacterales	46.39100472
+Pseudomonadales	37.28813559
+Pseudomonadales	38.7675507
+Pseudomonadales	64.14728682
+Enterobacterales	38.60759494
+Enterobacterales	34.62258266
+Opitutales	63.13740755
+Opitutales	65.01845018
+Opitutales	56.66434054
+Opitutales	47.34133791
+Opitutales	63.94485684
+Opitutales	63.73106061
+Opitutales	47.20450281
+Opitutales	57.20358999
+Pseudomonadales	64.93194556
+Pseudomonadales	63.9246779
+Pseudomonadales	67.90606654
+Pseudomonadales	62.21532091
+Rhodobacterales	56.98469554
+Enterobacterales	39.65087282
+Enterobacterales	37.96696315
+Rhodobacterales	57.89220404
+Rhodobacterales	60.91522881", header = T, sep = "\t")
+
+#SUMMARIZE
+stat_box_data <- function(y, upper_limit = 25 * 1.15) #upper limit value is foer the position of the text
+  {
+  return( 
+    data.frame(
+      y = 0.95 * upper_limit,
+      label = paste('count =', length(y), '\n',
+                    'mean =', round(mean(y), 1), '\n')
+    )
+  )
+}
+
+
+
+# Create the plot
+
+gcplot <- ggplot(pl.gc, aes(x = order, y = GC, fill = order)) +
+ # add half-violin from {ggdist} package
+  stat_halfeye(
+    # adjust bandwidth
+    adjust = 0.5,
+    # move to the right
+    justification = -0.2,
+    # remove the slub interval
+    .width = 0,
+    point_colour = NA
+  ) + 
+  geom_jitter(width=0.15, alpha=0.5) +
+  geom_boxplot(
+    width = 0.12,
+    # removing outliers
+    outlier.color = NA,
+    alpha = 0.5
+  ) + 
+   stat_summary(
+    fun.data = stat_box_data,
+    geom = "text",
+    hjust = 0.5,
+    vjust = 0.9,
+    color = "black",
+    size = 3
+  ) +
+  # Themes and Labels
+  scale_fill_tq() +
+  theme_tq() +
+  labs(
+    x = "taxa",
+    y = "GC content (%)",
+    fill = "order"
+  ) +
+  coord_flip()
+
+ggsave(file = "~/metagenomics/0.1.new/0.4.binning/0.7.bin.func/plasmid/bin.plasmid.annotate/plasmid.gc.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (gcplot)
+
+
+```
+
+
+#enterobacterales pathway completion heatmap
+```{r}
+
+bin <- read.table("~/metagenomics/0.1.new/0.4.binning/0.7.bin.func/enteeerobact.pathway.comp.txt", header=TRUE)
+
+
+#format
+rownames(bin) <- bin[,1]
+bin <- bin[, -1]
+
+# Define the color palette
+my_colors <- c("blue", colorRampPalette(brewer.pal(9, "YlOrRd"))(90))
+
+# Set the breaks for the color scale
+breaks <- c(seq(0, 10, length.out = 11), seq(10.01, 50, length.out = 40), seq(50.01, 100, length.out = 50))
+# Create the heatmap
+pdf("~/metagenomics/0.1.new/0.4.binning/0.7.bin.func/bin.pathway.pdf", width = 10, height = 20)
+
+pheatmap(bin,
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         show_rownames = TRUE,
+         breaks = breaks,
+         color = my_colors)
+
+dev.off()
+
+```
+
+
+# aldex lolipop plot
+```{r}
+
+adx <- read.table(file = paste0(file.path, 'aldex.lolipop.txt'), sep = '\t', header = TRUE)
+
+# Convert "Order" column to factor with the desired order
+adx$Order <- factor(adx$Order, levels = order)
+
+# Reshape the data into long format
+adx_long <- reshape2::melt(adx, id.vars = "Order", variable.name = "Group")
+
+# Plot
+adx_plot <-ggplot(adx_long, aes(x = value, y = Order, color = Group)) +
+  geom_segment(aes(x = 0, xend = value, y = Order, yend = Order), size = 1.5) +
+  geom_point(size = 3, shape = 21, fill = "white") +
+  theme_minimal() +
+  labs(x = "Enrichment", y = "Order", color = "Group") +
+  ggtitle("Enrichment of Orders in Different Groups") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+ggsave(file = paste0(file.path, 'aldex.lolipop.pdf'), plot = last_plot(), device = cairo_pdf)
+
+print (adx_plot)
+
+```
+
+
+#growth curve
+
+```{r}
+
+
+# Read data
+od <- read.csv("~/kelp-bact.growth.csv")
+
+
+# Calculate mean and standard deviation
+mean_data <- aggregate(OD ~/ time + strain, od, mean)
+sd_data <- aggregate(OD ~/ time + strain, od, sd)
+
+
+# Calculate confidence interval
+n <- length(unique(od$strain))
+conf_interval <- qt(0.975, df = n - 1) * (sd_data$OD / sqrt(n))
+
+lower_limit <- mean_data$OD - conf_interval
+upper_limit <- mean_data$OD + conf_interval
+se <- (sd_data$OD / sqrt(n))
+# Calculate doubling time
+doubling_time <- log(2) / mean_data$OD
+
+d.time <- as.data.frame (doubling_time)
+
+#PLOT
+strain_colors <- c("#b9936c", "#CB181D", "#F46D43", "#405d27", "#3e4444", "#86af49", "#6A51A3", "#034f84", "#955251", "#EFC050", "#AE017E", "#1D91C0", "#B565A7", "#67001F", "#98B4D4")
+
+gt <- ggplot(mean_data, aes(x = time, y = OD, color = strain)) +
+    geom_smooth() +
+  geom_point(size = 1, color = "black") +
+   geom_errorbar(aes(ymin = lower_limit, ymax = upper_limit), width = 0.2, size = 0.7) +
+    scale_y_continuous(trans='log10') +
+  labs(x = "Time (hrs)", y = "O.D.600") +
+  scale_color_manual(values = strain_colors) +
+  scale_fill_tq() +
+  theme_tq() +
+  labs(
+    x = "Time (hrs.)",
+    y = "0.D.600"
+  )
+
+
+
+ggsave(file = "~/growth.curve.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+print (gt)
+
+
+```
+
+
+```{r}
+#select data
+fvfm <- read.table("~/fvfm.txt", sep = '\t', header = TRUE) 
+
+pl.fv <- fvfm %>%
+  ggbetweenstats(x = group, y = fvfm, grouping.var = group,
+                 xlab = "Treatments",
+                 ylab = "fv/fm",
+                 plot.type = "boxviolin",
+                 pairwise.display = "significant",
+                 p.adjust.method = "fdr",
+                 type = "robust",
+                 package = "ggsci",
+                 palette = "default_jco",
+                 plotgrid.args = list(nrow = 3)) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        legend.position = "bottom") +
+  #scale_color_jco() +
+geom_boxplot(aes(fill = group), outlier.shape = NA)+
+  geom_violin(aes(fill = group), alpha = 0.8) +
+geom_jitter(color = "black", width = 0.2) 
+
+ggsave(file = "~/fvfm.pdf", plot = last_plot(), device = cairo_pdf, width = 8, height = 6)
+
+
+```
+
