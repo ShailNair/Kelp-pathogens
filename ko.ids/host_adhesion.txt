@@ -1,0 +1,11 @@
+K04334 csgB	
+K04335 csgA	
+K04336 csgC	
+K11931 pgaB	
+K11935 pgaA	
+K11936 pgaC	
+K11937 pgaD	
+K12148 bssS	
+K12687 flu	
+K13650 mcbA	
+K13654 mcbR	
