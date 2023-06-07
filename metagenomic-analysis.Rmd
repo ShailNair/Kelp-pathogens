@@ -1,0 +1,1273 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#0.1 Quality check and Cleaning
+
+```{r}
+#run QC
+mkdir -p reports/multiqc
+
+fastqc *.fastq.gz -o reports \
+-t 30
+
+conda activate multiqc
+
+multiqc reports \
+-o reports/multiqc
+
+#The qc reports showed higher percent of illumina universal adapters. to remove
+
+for SET in `cat list.txt`
+do
+cutadapt -a AGATCGGAAGAG -A AGATCGGAAGAG \
+--cores 30 \
+-o trimmed/$SET.1.fastq.gz -p trimmed/$SET.2.fastq.gz \
+$SET.1.fastq.gz $SET.2.fastq.gz
+done
+
+```
+
+#2.0 species classification
+
+```{r}
+#motu-profiler
+#marker gene based
+
+  
+mkdir -p analysis/0.1.taxonomy/0.2.motu-profiler/
+
+conda activate motus-3.0
+
+for SET in `cat list.txt`
+do
+motus profile -f trimmed/$SET.1.fastq.gz \
+-r trimmed/$SET.2.fastq.gz \
+-n $SET \
+-t 20 \
+-c -q \
+-o analysis/0.1.taxonomy/0.2.motu-profiler/$SET.tsv
+done
+
+motus merge -d  analysis/0.1.taxonomy/0.2.motu-profiler/ \
+-o  analysis/0.1.taxonomy/0.2.motu-profiler/all.motus.merged.tsv
+
+
+#remove all reference otus with no count
+
+
+cat analysis/0.1.taxonomy/0.2.motu-profiler/all.motus.merged.tsv | \
+awk 'NR > 2' \
+| awk -F'\t' '$3 != 0 || $4 != 0 || $5 != 0 || $6 != 0 || $7 != 0 || $8 != 0 || $9 != 0 || $10 != 0' > \
+analysis/0.1.taxonomy/0.2.motu-profiler/all.motus.merged.filtered.tsv
+
+
+```
+
+
+Assembly
+
+```{r}
+
+mkdir -p analysis/0.2.assembly/0.1.spades
+
+conda activate spades
+
+
+#individual assemblies
+for SET in `cat list.txt`
+do 
+spades.py --meta --pe1-1 trimmed/$SET.1.fastq.gz \
+--pe1-2 trimmed/$SET.2.fastq.gz \
+-t 50 \
+-k 21,33,55,77,99,127 \
+-o analysis/0.2.assembly/0.1.spades/$SET
+done
+
+
+
+#conconate all spades contigs for binning
+
+mkdir -p analysis/0.2.assembly/0.2.merged.contig
+
+#Use Vamb's concatenate.py to make the FASTA catalogue of all assemblies.
+#m=0 to not filter out any contigs
+
+concatenate.py analysis/0.2.assembly/0.2.merged.contig/kelp.merged.contigs.fasta \
+analysis/0.2.assembly/0.1.spades/HK-1/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/HK-2/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/UHK-1/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/UHK-2/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/HK-Hu/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/UHK-Hu-1/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/UHK-Hu-1/contigs.fasta \
+analysis/0.2.assembly/0.1.spades/HKSW/contigs.fasta \
+--nozip -m 0
+
+
+#3.1 Reformat scaffold file 
+
+anvi-script-reformat-fasta analysis/0.2.assembly/0.2.merged.contig/kelp.merged.contigs.fasta \
+-o analysis/0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta -l 0 --simplify-names
+
+```
+
+
+
+#4.0 Predict orf/cds
+```{r}
+
+mkdir -p 0.3.orf_predict
+
+prodigal -i 0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta \
+-p meta -f gff \
+-o 0.3.orf_predict/kelp.fixed.gff \
+-a 0.3.orf_predict/kelp.fixed.faa \
+-d 0.3.orf_predict/kelp.fixed.fna 
+
+```
+
+
+#6.0 Binning 
+
+```{r}
+
+#  6.1 Using metabat2,maxbin2 and concoct of the metwrap.
+
+mkdir -p 0.4.binning
+
+
+#run metawrap
+
+cd 
+  
+metawrap binning -o 0.4.binning/0.1.metawrap \
+-t 50 --metabat2 --concoct --maxbin \
+-a 0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta \
+/home/gene/kelp_metagenomics/trimmed/*.fastq
+
+
+#vamb binner 
+#https://github.com/RasmussenLab/vamb
+
+conda activate vamb-3.0.8
+
+#run vamb
+vamb --outdir 0.4.binning/0.2.vamb/ \
+--fasta 0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta \
+--jgi 0.4.binning/0.1.metawrap/work_files/metabat_depth.txt
+
+#get bin fasta files
+
+mkdir -p 0.4.binning/0.2.vamb/fasta 
+
+python create_fasta.py \
+0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta \
+0.4.binning/0.2.vamb/clusters.tsv \
+200000  \
+0.4.binning/0.2.vamb/fasta 
+
+
+#rename bins extension to .fa
+
+for f in analysis/0.4.binning/0.2.vamb/fasta/*.fna; do 
+    mv -- "$f" "${f%.fna}.fa"
+done
+
+#binning via metabinner
+
+mkdir -p  analysis/0.4.binning/0.3.metabinner/profiles
+
+#create coverage depth profile
+#we will use the coverage depth file created by  metabat2 above
+#remove any contigs shorter than 1000bp
+
+cat 0.4.binning/0.1.metawrap/work_files/metabat_depth.txt | \
+awk '{if ($2>1000) print $0 }' | cut -f -1,4- > \
+0.4.binning/0.3.metabinner/profiles/coverage_profile.tsv
+
+#composition profile 
+# first Filter out less than 1000 bp contigs from the assembly
+
+#filter out less than 1000 bp contigs from the assembly
+python /home/soft/mtabinner-1.4.3/scripts/Filter_tooshort.py \
+0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed.fasta 1000
+
+#create composition profile
+python /home/soft/mtabinner-1.4.3/scripts/gen_kmer.py \
+0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed_1000.fa 1000 4
+
+
+#run metabinner
+
+bash run_metabinner.sh -a 0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed_1000.fa \
+-o 0.4.binning/0.3.metabinner/output \
+-d 0.4.binning/0.3.metabinner/profiles/coverage_profile.tsv \
+-k 0.2.assembly/0.2.merged.contig/kelp.merged.contigs_fixed_1000_kmer_4_f1000.csv \
+-p /home/soft/mtabinner-1.4.3 \
+-t 30
+
+
+#refine and consolidate bins
+
+#metwrap refinement module requires files in .fa/fasta format
+
+#rename bin extension of metabinner to .fa
+
+for f in ~/greedy_cont_weight_3_mincomp_50.0_maxcont_15.0_bins/*.fna; do 
+    mv -- "$f" "${f%.fna}.fa"
+done
+
+
+#dereplication at species level
+#most studies agree that 95% ANI is an appropriate threshold for species-level de-replication. See Olm et. al. 2020
+
+
+mkdir -p 0.4.binning/0.5.drep/0.1.fasta
+
+cp 0.4.binning/0.1.metawrap/cococt_out/cococt_fasta/*.fa  0.4.binning/0.5.drep/0.1.fasta
+cp 0.4.binning/0.1.metawrap/metabat2_bins/*.fa 0.4.binning/0.5.drep/0.1.fasta
+cp ~/addrefined2and3comps/greedy_cont_weight_3_mincomp_50.0_maxcont_15.0_bins/*.fa 0.4.binning/0.5.drep/0.1.fasta
+cp 0.4.binning/0.2.vamb/fasta/*.fa 0.4.binning/0.5.drep/0.1.fasta
+
+
+export CHECKM_DATA_PATH=/home/database/checkm
+
+
+#at 98% ANI 
+dRep dereplicate 0.4.binning/0.5.drep/ \
+-g 0.4.binning/0.5.drep/0.1.fasta/*.fa \
+-p 50 --S_algorithm fastANI \
+--P_ani 0.9 --S_ani 0.98 \
+--l 50000 \
+-nc 0.85 \
+-comp 50 \
+-con 10
+
+rm -r 0.4.binning/0.5.drep/0.1.fasta/
+ 
+#rename final set of bins
+  
+
+ 
+#rename final set of bins
+  
+source_dir="0.4.binning/0.5.drep/dereplicated_genomes"
+tmp_dir="0.4.binning/0.5.drep/dereplicated_genomes/tmp"
+mkdir "$tmp_dir"
+
+count=1
+for file in "$source_dir"/*.fa; do
+    if [ -f "$file" ]; then
+        new_name=$(printf "bin%03d.fa" "$count")
+        cp "$file" "$tmp_dir/$new_name"
+        count=$((count + 1))
+    fi
+done
+
+# change bin contigs names to their file names
+  
+source2_dir="0.4.binning/0.5.drep/dereplicated_genomes/tmp"
+tmp2_dir="0.4.binning/0.5.drep/dereplicated_genomes/tmp2"
+mkdir "$tmp2_dir"
+
+for file in "$source2_dir"/*.fa; do
+    filename=$(basename "$file")
+    binname="${filename%.*}"
+    awk -v binname="$binname" '/^>/{gsub(/^>/, ">"binname"_");}1' "$file" > "$tmp2_dir/$binname.fa"
+done
+
+
+# Replace the original files with the renamed files
+rm "$source_dir"/*.fa
+mv "$tmp2_dir"/*.fa "$source_dir"
+# Remove the temporary directory
+rm -r "$tmp_dir"  
+rm -r "$tmp2_dir" 
+
+#checkm final bins
+  
+mkdir -p 0.4.binning/0.6.checkm
+  
+checkm lineage_wf 0.4.binning/0.5.drep/dereplicated_genomes/ \
+0.4.binning/0.6.checkm \
+-x fa \
+-f 0.4.binning/0.6.checkm/checkm.res.tsv \
+--tab_table \
+-t 30
+
+
+```
+
+
+```{r}
+#bin taxonomy
+mkdir -p 0.4.binning/0.7.bin_taxo
+
+# We will use gtdbtk package to assign taxonomy to our bins
+
+conda activate gtdbtk-2.2.6
+
+gtdbtk classify_wf --genome_dir 0.4.binning/0.5.drep/dereplicated_genomes \
+--extension fa \
+--out_dir 0.4.binning/0.7.bin_taxo \
+--cpus 30 \
+--mash_db /home/database/GTDB/R207_v2/
+
+
+conda activate phylogenetic_analysis
+
+gunzip 0.4.binning/0.7.bin_taxo/align/gtdbtk.bac120.user_msa.fasta.gz
+
+iqtree2 -s 0.4.binning/0.7.bin_taxo/align/gtdbtk.bac120.user_msa.fasta \
+-st AA --alrt 1000 -B 1000 \
+-T 30
+
+```
+
+
+```{r}
+#bin functions
+
+mkdir -p 0.4.binning/0.7.bin_func
+
+#get protein files of each bin
+
+mkdir -p 0.4.binning/0.7.bin_func/0.1.proteins/
+
+for SET in `cat bin.txt`
+do
+prodigal -i  0.4.binning/0.5.drep/dereplicated_genomes/$SET.fa \
+-f gff \
+-o 0.4.binning/0.7.bin_func/0.1.proteins/$SET.gff \
+-a 0.4.binning/0.7.bin_func/0.1.proteins/$SET.faa \
+-d 0.4.binning/0.7.bin_func/0.1.proteins/$SET.fasta
+done
+
+
+#kofam
+mkdir -p 0.4.binning/0.7.bin_func/0.2.kofam/pathway
+
+conda activate kofamscan
+
+for SET in `cat bin.txt`
+do
+exec_annotation -f mapper \
+-o 0.4.binning/0.7.bin_func/0.2.kofam/kofam.annot/$SET.ko.txt \
+0.4.binning/0.7.bin_func/0.1.proteins/$SET.faa \
+-k /home/database/kofam2022/ko_list \
+-p /home/database/kofam2022/profiles/ \
+--cpu 50
+done
+
+#remove ids with no KO assignment
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/*.ko.txt; do
+    awk -F"\t" '$2!=""' "$file" > temp_file && mv temp_file "$file"
+done
+
+#remove first column, remove duplicates and add header
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/*.ko.txt; do
+    awk -F"\t" '$2!="" {print $2}' "$file" | sort | uniq | sed '1s/^/ko\n/' > temp_file && mv temp_file "$file"
+done
+
+
+#beta lactamase kos
+
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/*.ko.txt; do
+grep -f 0.4.binning/0.7.bin_func/b-lactamase.ko.txt \
+"$file" > \
+0.4.binning/0.7.bin_func/0.2.kofam/betalac/$(basename "$file" .txt).txt
+done
+
+#remove empty files
+find 0.4.binning/0.7.bin_func/0.2.kofam/betalac/ -size 0 -print -delete
+
+
+#replace header with filename
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/betalac/*.txt; do
+    # Extract the bin number from the filename
+    bin_number=$(basename "$file" | sed 's/\([0-9]*\)\.ko\.txt/\1/')
+    # Generate the output filename based on the bin number
+    output_file="${bin_number}.txt"
+    # Add the header to the output file
+    echo "$bin_number" > "$output_file"
+    # Append the contents of the matching file
+    cat "$file" >> "$output_file"
+    # Replace the original file with the modified version
+    mv "$output_file" "$file"
+done
+
+#merge
+
+paste 0.4.binning/0.7.bin_func/0.2.kofam/betalac/*.txt > \
+0.4.binning/0.7.bin_func/0.2.kofam/betalac/bin.betalac.ko.csv  
+
+
+#bacterial toxins
+mkdir -p 0.4.binning/0.7.bin_func/0.2.kofam/bact.tox
+
+# Loop through *.ko.txt files
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/*.ko.txt; do
+    # Extract the bin number from the filename
+    bin_number=$(basename "$file" | sed 's/\([0-9]*\)\.ko\.txt/\1/')
+    # Generate the output filename based on the bin number
+    output_file="0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/${bin_number}.tox.txt"
+    # Match the files and extract the desired lines
+    awk 'FNR==NR{a[$1];next} $1 in a' "$file" /home/gene/metabolism/bact_toxins.txt > "$output_file"
+done
+
+#remove empty files
+find 0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/ -size 0 -print -delete
+
+#add headers
+
+# Loop through *.ko.txt files
+for binfile in 0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/*.txt; do
+    # Extract the bin number from the filename
+    bin_number=$(basename "$file" | sed 's/\([0-9]*\)\.tox\.txt/\1/')
+    # Generate the output filename based on the bin number
+    output_file="${bin_number}.txt"
+    # Add the header to the output file
+    echo "$bin_number" > "$output_file"
+    # Append the contents of the matching file
+    cat "$file" >> "$output_file"
+    # Replace the original file with the modified version
+    mv "$output_file" "$file"
+done
+
+
+
+#replace spaces with "-"
+
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/*.txt; do
+sed -i 's/ /-/g' $file
+done
+#merge
+paste 0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/*.txt > \
+0.4.binning/0.7.bin_func/0.2.kofam/bact.tox/bin.toxin.ko.tsv  
+
+
+
+#check pathway completion
+#the script calculate pathway completion as (number of kos present/number of kos required)x100
+
+python /home/gene/0.scripts/kegg.pathway.estimate.py \
+-i 0.4.binning/0.7.bin_func/0.2.kofam/ \
+-d /home/gene/0.scripts/kegg.pathway.csv \
+-o 0.4.binning/0.7.bin_func/0.2.kofam/pathway/completion
+
+
+
+#extract custom pathways info
+mkdir -p 0.4.binning/0.7.bin_func/0.2.kofam/pathway/pathog.pathways
+
+for file in 0.4.binning/0.7.bin_func/0.2.kofam/pathway/completion/*.csv; do
+grep -f 0.4.binning/0.7.bin_func/custom.kegg.pathways.txt \
+"$file" > \
+0.4.binning/0.7.bin_func/0.2.kofam/pathway/pathog.pathways/$(basename "$file" .csv)_pathog.pathway.csv
+done
+
+#add headers
+sed -i '1i pathway_id,pathway_name,completion%,present,absent' \
+0.4.binning/0.7.bin_func/0.2.kofam/pathway/pathog.pathways/*.csv
+
+
+#keep only column 3 and merge
+mkdir -p 0.4.binning/0.7.bin_func/0.2.kofam/pathway/pathog.pathways/processed/
+  
+cd 0.4.binning/0.7.bin_func/0.2.kofam/pathway/pathog.pathways/
+for file in *.csv; do
+cut -d ',' -f 3 "$file" > \
+"processed/${file%.csv}.tmp"
+done
+
+#replace header with filename
+cd processed
+for file in *.ko_pathwaycompletion_pathog.pathway.tmp; do
+  sed -i "1s/.*/$(basename "$file" .ko_pathwaycompletion_pathog.pathway.tmp)/" "$file"
+done
+
+paste -d ',' *.tmp > pathol.pathway.combined.csv
+
+rm *.tmp
+
+cd /home/gene/kelp_metagenomics/analysis
+
+
+for SET in `cat bin.txt`
+do
+mkdir -p 0.4.binning/0.7.bin_func/0.3.cazy/$SET
+done
+
+
+#AMR
+mkdir -p 0.4.binning/0.7.bin_func/0.3.AMR/
+  
+conda activate amrfinderplus-3.10 
+
+for SET in `cat bin.txt`
+do
+amrfinder --plus -p 0.4.binning/0.7.bin_func/0.1.proteins/$SET.faa \
+-o 0.4.binning/0.7.bin_func/0.3.AMR/$SET.amr.tsv \
+--threads 30
+done
+
+
+#keep files with more than one line
+find 0.4.binning/0.7.bin_func/0.3.AMR/ \
+-name "*.tsv" -type f -exec bash \
+-c '[[ $(wc -l < "$0") -gt 1 ]] || rm "$0"' {} \;
+
+#grep "carbapenem" 0.4.binning/0.7.bin_func/0.3.AMR/*.tsv
+
+cat 0.4.binning/0.7.bin_func/0.3.AMR/*.tsv > 0.4.binning/0.7.bin_func/0.3.AMR/bin.amr.tsv
+
+% Coverage 0.4.binning/0.7.bin_func/0.3.AMR/bin.amr.tsv
+
+#remove multiple header 
+grep -v "% Coverage" -m 1 0.4.binning/0.7.bin_func/0.3.AMR/bin.amr.tsv > \
+tmp_file && mv tmp_file 0.4.binning/0.7.bin_func/0.3.AMR/bin.amr.tsv
+
+
+
+#cazy
+conda activate dbcan
+
+for SET in `cat bin.txt`
+do
+mkdir -p 0.4.binning/0.7.bin_func/0.4.cazy/$SET
+done
+
+for SET in `cat bin.txt`
+do
+run_dbcan 0.4.binning/0.7.bin_func/0.1.proteins/$SET.faa \
+protein  \
+--dia_cpu 30 --hmm_cpu 30 --tf_cpu 30 \
+--out_dir 0.4.binning/0.7.bin_func/0.4.cazy/$SET \
+--eCAMI_jobs 10 \
+--db_dir /home/database/dbCAN2/ 
+  done  
+
+#filter and combine
+python /home/gene/0.scripts/cazy.combine.bins.py \
+-i 0.4.binning/0.7.bin_func/0.4.cazy/ \
+-o 0.4.binning/0.7.bin_func/0.4.cazy/combine.cazy.bins.tsv
+
+
+
+#plasmid detection
+
+mkdir -p 0.4.binning/0.7.bin_func/0.5.plasmid/0.1.raw
+  
+conda activate plastforest-1.4
+
+cd /home/soft/PlasForest-1.4
+
+for SET in `cat bin.txt`
+do
+python3 PlasForest.py -i 0.4.binning/0.5.drep/dereplicated_genomes/$SET.fa \
+-o 0.4.binning/0.7.bin_func/0.5.plasmid/0.1.raw/$SET.csv \
+-b -f -r \
+--threads 30
+done
+
+cd -
+  
+#filter to keep lines that contains "plasmid" in its 10th column
+mkdir -p 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/
+
+for file in 0.4.binning/0.7.bin_func/0.5.plasmid/0.1.raw/*.csv; do
+    if grep -q "Plasmid" "$file"; then
+        mkdir -p 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/
+        awk -F "," 'NR == 1 || $10 == "Plasmid"' "$file" > 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/"$(basename "$file" .csv)_filt.csv"
+    fi
+done
+
+
+#extract sequence
+#first combine all bin files
+cat 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/*.csv \
+> 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/tmp
+
+#remove duplicated lines (headers) and keep only first col
+sort -u -t, -k1,1 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/tmp | \
+cut -d, -f1 > 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/combined.csv
+
+#merge bins
+cat 0.4.binning/0.5.drep/dereplicated_genomes/*.fa \
+> 0.4.binning/0.5.drep/dereplicated_genomes/all.bin.cat.fa
+
+# extract contigs
+
+conda activate viralverify-1.1
+
+seqkit grep -n -f 0.4.binning/0.7.bin_func/0.5.plasmid/0.2.filt/combined.csv \
+0.4.binning/0.5.drep/dereplicated_genomes/all.bin.cat.fa > \
+0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.fasta
+
+
+#translate to proteins
+
+prodigal -i 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.fasta \
+-p meta \
+-a 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.faa 
+
+#annotate
+
+mkdir -p 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/
+
+#kofamscan
+  
+conda activate kofamscan
+exec_annotation -f mapper \
+-o 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/plasmid.ko.txt \
+0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.faa \
+-k /home/database/kofam2022/ko_list \
+-p /home/database/kofam2022/profiles/ \
+--cpu 30
+
+
+#add pathway info to kegg
+#to merge predicted the information file with thier abundance file modify the files like,
+#make sure that the headers of first column of both files match
+ko,HK.1,HK.2,HK.Hu,HKSW,UHK.1,UHK.2,UHK.Hu.1,UHK.Hu.2
+K00001,0,0,0.045452794039026,3.4818703747242,0.013791491255032,0.024990665576339,0.085028508597308,0.059797179449814
+K00003,3.3623511753424,2.8837458941861,67.317431375627,85.772412352805,21.677151980691,34.302557501192,51.158102827772,45.555301813833
+K00004,0,0,0.037820376737916,3.059534186505,0.013107615655609,0.013725409446441,0.13603539483456,0.016686607324226
+K00005,0.014036629392765,0,0.19714292073264,0.29572903763069,0.03462542173275,0.0661015615462,0.54792022001816,0.45674049749752
+
+ko,gene_id,pathway_id,pathway_name
+K00844,HK,ko00010,Glycolysis_Gluconeogenesis
+K12407,GCK,ko00010,Glycolysis_Gluconeogenesis
+K00845,glk,ko00010,Glycolysis_Gluconeogenesis
+K25026,glk,ko00010,Glycolysis_Gluconeogenesis
+
+#tsv to csv
+tr '\t' ',' < 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/tmp > \
+0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/tmp2
+#run
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+/home/gene/0.scripts/kegg.pathway.csv \
+0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/tmp2 \
+0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/ \
+bin.plasmid.pathway.csv
+
+
+#AMR
+conda activate amrfinderplus-3.10 
+
+amrfinder --plus -p 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.faa \
+-o 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/plasmid.amr.tsv \
+--threads 30
+
+
+
+ #cazy 
+conda activate dbcan
+
+run_dbcan 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.faa \
+protein  \
+--dia_cpu 30 --hmm_cpu 30 --tf_cpu 30 \
+--out_dir 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/ \
+--eCAMI_jobs 10 \
+--db_dir /home/database/dbCAN2/
+  
+#eggnog  
+mkdir -p 0.5.functions/0.1.eggnog
+
+conda activate eggnog-mapper-2.1.10
+
+export EGGNOG_DATA_DIR=/home/database/eggnog/2021.db
+
+emapper.py -m diamond \
+-i 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.contigs.faa \
+-o 0.4.binning/0.7.bin_func/0.5.plasmid/bin.plasmid.annotate/plasmid.egnogg \
+--cpu 30 --sensmode ultra-sensitive
+  
+```
+
+#bin abundance
+```{r}
+mkdir -p 0.4.binning/0.8.bin.abund/tmp
+
+conda activate coverm
+
+#make a tmp directory
+export TMPDIR=0.4.binning/0.8.bin.abund/tmp
+
+#run
+cd /home/gene/kelp_metagenomics/trimmed
+
+#get rel.abund  and trimmed mean abund
+TMPDIR=0.4.binning/0.8.bin.abund/tmp \
+coverm genome -d 0.4.binning/0.5.drep/dereplicated_genomes/ \
+-x fa \
+-c HK-1_R1.fastq.gz HK-1_R2.fastq.gz \
+HK-2_R1.fastq.gz HK-2_R2.fastq.gz \
+HK-Hu_R1.fastq.gz HK-Hu_R2.fastq.gz \
+HKSW_R1.fastq.gz HKSW_R2.fastq.gz \
+UHK-1_R1.fastq.gz UHK-1_R2.fastq.gz \
+UHK-2_R1.fastq.gz UHK-2_R2.fastq.gz \
+UHK-Hu-1_R1.fastq.gz UHK-Hu-1_R2.fastq.gz \
+UHK-Hu-2_R1.fastq.gz UHK-Hu-2_R2.fastq.gz \
+-t 50 \
+-p bwa-mem \
+-m relative_abundance trimmed_mean \
+--min-read-percent-identity 90 \
+--min-read-aligned-percent 75 \
+-o 0.4.binning/0.8.bin.abund/bin.rel.abund.tsv
+
+
+cd -
+  
+#convert tsv to csv
+
+tr '\t' ',' < 0.4.binning/0.8.bin.abund/bin.trim.mean.tsv.txt > \
+0.4.binning/0.8.bin.abund/bin.trim.mean.csv
+
+#COMBINE BIN ABUNDANCE WITH TAXONOMY
+#edit files to contain same first column header.
+
+ #(requires pandas)
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+0.4.binning/0.7.bin_taxo/bin.taxo.csv \
+0.4.binning/0.8.bin.abund/bin.rawcount.csv \
+0.4.binning/0.7.bin_taxo/ \
+bin.taxo.abund.csv
+
+
+#trimmed mean
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+0.4.binning/0.7.bin_taxo/bin.taxo.csv \
+0.4.binning/0.8.bin.abund/bin.trim.mean.csv \
+0.4.binning/0.7.bin_taxo/ \
+bin.taxo.trim.mean.csv
+
+```
+
+
+
+#5.0 Functional annotation of metagenome assembly
+
+```{r}
+# Kofamscan
+
+mkdir -p 0.6.Function/0.1.kofamscan
+
+conda activate kofamscan
+
+exec_annotation -f mapper \
+-o 0.6.Function/0.1.kofamscan/kelp.fixed_ko.txt \
+0.3.orf_predict/kelp.fixed.faa \
+-k /home/database/kofam2022/ko_list \
+-p /home/database/kofam2022/profiles/ \
+--cpu 30
+
+
+#5.5 CAZZY
+
+mkdir -p 0.6.Function/0.2.cazy/
+  
+conda activate dbcan
+
+run_dbcan 0.3.orf_predict/kelp.fixed.faa \
+protein  \
+--dia_cpu 30 --hmm_cpu 30 --tf_cpu 30 \
+--out_dir 0.6.Function/0.2.cazy/ \
+--eCAMI_jobs 10 \
+--db_dir /home/database/dbCAN2/
+                 
+#antibiotic resistence3 genes
+  
+mkdir -p 0.6.Function/0.3.AMR/
+  
+conda activate amrfinderplus-3.10 
+
+
+amrfinder --plus -p 0.3.orf_predict/kelp.fixed.faa \
+-o 0.6.Function/0.3.AMR/kelp.amr.genes.tsv \
+--threads 30 
+
+
+#growth estimation via grodon2
+#completed on windows R in partial mode
+
+#combine
+
+cut -d',' -f2- 0.4.binning/0.7.bin_taxo/bin.taxo.trim.mean.csv \
+> 0.4.binning/0.7.bin_taxo/tmp
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+0.4.binning/0.7.bin_taxo/tmp \
+0.4.binning/bin.growt.estimate.csv \
+0.4.binning/ \
+bin.growth.abund.taxo.csv
+
+```
+
+
+
+# 7.0 Count read numbers of predicted orf
+```{r}
+
+mkdir -p 0.7.featurecount 
+
+cd 0.4.binning/0.1.metawrap/work_files
+
+conda activate subread
+
+#pROCESS ALL FILES TOGETHER INTO ONE OUTPUT FILE
+
+
+featureCounts -T 30 -F gff -p -t CDS -g ID --verbose -a 0.3.orf_predict/kelp.fixed.gff \
+-o 0.7.featurecount/all.featureCounts.txt \
+*.bam
+
+
+# 7.1 Convert raw reads to tpm values
+
+use shiny tpm converter app 
+lINK: https://www.jianshu.com/p/2471f1fb946c
+
+
+#The output is csv file which can be converted to space delimited via csvkit package:
+  
+ csvformat -D " " all.featureCounts.tpm.csv > all.featureCounts_tpm.tsv 
+
+#remove extra characteeeeer
+sed -i 's/"//g' 0.7.featurecount/all.featureCounts.tpm.csv
+
+
+sed 's/,/ /g' 0.7.featurecount/all.featureCounts.tpm.csv > 0.7.featurecount/all.featureCounts.tpm.txt
+
+#add KO gene and pathway information
+#convert the files to csv
+tr '\t' ',' < 0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt > \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.csv
+
+
+#to merge predicted the information file with thier abundance file modify the files like,
+#make sure that the headers of first column of both files match
+ko,HK.1,HK.2,HK.Hu,HKSW,UHK.1,UHK.2,UHK.Hu.1,UHK.Hu.2
+K00001,0,0,0.045452794039026,3.4818703747242,0.013791491255032,0.024990665576339,0.085028508597308,0.059797179449814
+K00003,3.3623511753424,2.8837458941861,67.317431375627,85.772412352805,21.677151980691,34.302557501192,51.158102827772,45.555301813833
+K00004,0,0,0.037820376737916,3.059534186505,0.013107615655609,0.013725409446441,0.13603539483456,0.016686607324226
+K00005,0.014036629392765,0,0.19714292073264,0.29572903763069,0.03462542173275,0.0661015615462,0.54792022001816,0.45674049749752
+
+ko,gene_id,pathway_id,pathway_name
+K00844,HK,ko00010,Glycolysis_Gluconeogenesis
+K12407,GCK,ko00010,Glycolysis_Gluconeogenesis
+K00845,glk,ko00010,Glycolysis_Gluconeogenesis
+K25026,glk,ko00010,Glycolysis_Gluconeogenesis
+
+#usage
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+/home/gene/0.scripts/kegg.pathway.csv \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.csv \
+0.6.Function/0.1.kofamscan/ \
+tmp
+
+
+```
+
+
+# 7.2 Merging tpm file with annotations
+```{r}
+
+#from tpm converted file
+
+#Delete column 10 (gene_name) FROM TPM CONVERTED FILE
+
+cut -d' ' -f1-9 0.7.featurecount/all.featureCounts.tpm.txt > 0.7.featurecount/tmp
+
+#PARSING KO ANNOTATION TABLE
+
+#Rename genes in ko table TO MATCH WITH THE FEATURESCOUNTS
+
+sed -r 's/^c_0*([0-9]*)/\1/' \
+0.6.Function/0.1.kofamscan/kelp.fixed_ko.txt \
+> 0.6.Function/0.1.kofamscan/kelp.fixed_ko1.txt
+
+#now we merge the KO table with their TPM values
+
+awk '
+NR==FNR {                      
+    a[$1]=$2                    
+    next                       
+}
+{                               
+    print (($1 in a)?a[$1]:$1, $2, $3, $4, $5,$6, $7, $8, $9) 
+}' 0.6.Function/0.1.kofamscan/kelp.fixed_ko1.txt \
+0.7.featurecount/tmp > \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm.txt
+
+
+#sort the data based on first column (ko)
+
+sort -k1 0.6.Function/0.1.kofamscan/kelp.ko_tpm.txt > 0.6.Function/0.1.kofamscan/tmp
+
+#Remove blank ko :check and remove lines containing less than 9 strings 
+
+awk 'NF==9' 0.6.Function/0.1.kofamscan/tmp > 0.6.Function/0.1.kofamscan/tmp2
+
+
+#Now, Sum up TPM OF multiple locations of same KO
+
+datamash -W --headers groupby 1 sum 2,3,4,5,6,7,8, 9 \
+< 0.6.Function/0.1.kofamscan/tmp2 > 0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt
+
+
+
+#add KO gene and pathway information
+#convert the files to csv
+tr '\t' ',' < 0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt > \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.csv
+
+
+#to merge predicted the information file with thier abundance file modify the files like,
+#make sure that the headers of first column of both files match
+ko,HK.1,HK.2,HK.Hu,HKSW,UHK.1,UHK.2,UHK.Hu.1,UHK.Hu.2
+K00001,0,0,0.045452794039026,3.4818703747242,0.013791491255032,0.024990665576339,0.085028508597308,0.059797179449814
+K00003,3.3623511753424,2.8837458941861,67.317431375627,85.772412352805,21.677151980691,34.302557501192,51.158102827772,45.555301813833
+K00004,0,0,0.037820376737916,3.059534186505,0.013107615655609,0.013725409446441,0.13603539483456,0.016686607324226
+K00005,0.014036629392765,0,0.19714292073264,0.29572903763069,0.03462542173275,0.0661015615462,0.54792022001816,0.45674049749752
+
+ko,gene_id,pathway_id,pathway_name
+K00844,HK,ko00010,Glycolysis_Gluconeogenesis
+K12407,GCK,ko00010,Glycolysis_Gluconeogenesis
+K00845,glk,ko00010,Glycolysis_Gluconeogenesis
+K25026,glk,ko00010,Glycolysis_Gluconeogenesis
+
+
+#usage
+ (requires pandas)
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+input_file1 \
+input_file2 \
+output_dir \
+output_file
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+/home/gene/0.scripts/kegg.pathway.csv \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.csv \
+0.6.Function/0.1.kofamscan/ \
+tmp
+
+
+#sum up tpm values of same pathways
+#first we clean the file to be compatible with datamash
+cut -d',' -f4,6-13 \
+0.6.Function/0.1.kofamscan/tmp > \
+0.6.Function/0.1.kofamscan/tmp2
+
+
+#sort while keeping iheader 
+
+{
+    # grab the header and print it untouched
+    IFS= read -r header
+    echo "$header"
+    # now process the rest of the input
+    sort -k1
+} < 0.6.Function/0.1.kofamscan/tmp2 > 0.6.Function/0.1.kofamscan/tmp3
+
+#sum
+datamash -t $',' --headers groupby 1 sum 2-9 \
+< 0.6.Function/0.1.kofamscan/tmp3 > \
+0.6.Function/0.1.kofamscan/tmp4
+
+
+#add pathway names
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+/home/gene/0.scripts/kegg.pathway.names.csv \
+0.6.Function/0.1.kofamscan/tmp4 \
+0.6.Function/0.1.kofamscan/ \
+kelp.pathway.tpm.sum.csv
+
+
+#process amr_annotation files
+
+cut -f1-2,19- 0.6.Function/0.3.AMR/kelp.amr.genes.tsv > 0.6.Function/0.3.AMR/tmp
+
+
+#Rename genes in ko table TO MATCH WITH THE FEATURESCOUNTS
+
+sed -r 's/^c_0*([0-9]*)/\1/' 0.6.Function/0.3.AMR/kelp.amr.genes.tsv > 0.6.Function/0.3.AMR/tmp
+
+
+#now we merge the amr table with their TPM values
+
+#extract matching lines
+
+#make list to extract 
+awk '{print $1}' 0.6.Function/0.3.AMR/tmp > 0.6.Function/0.3.AMR/list
+
+
+grep -w -F -f 0.6.Function/0.3.AMR/list \
+0.7.featurecount/tmp > \
+0.6.Function/0.3.AMR/amr_tpm
+#add header
+head -n 1 0.7.featurecount/tmp | \
+cat - 0.6.Function/0.3.AMR/amr_tpm > \
+temp && mv temp 0.6.Function/0.3.AMR/amr_tpm
+
+#sort the data based on first column (ko) and then remove lines with less than 9 column
+
+sort -k1 0.6.Function/0.3.AMR/amr_tpm | \
+awk 'NF==9' > \
+0.6.Function/0.3.AMR/kelp.amr.genes.tpm.txt
+
+
+#add gene info
+#edit file in excel to remove unnecessary columns
+#make gene_id unifirm
+sed -r 's/^c_0*([0-9]*)/\1/' 0.6.Function/0.3.AMR/kelp.amr.genes1.tsv > \
+0.6.Function/0.3.AMR/tmp2
+
+
+#sort while keeping iheader 
+
+{
+    # grab the header and print it untouched
+    IFS= read -r header
+    echo "$header"
+    # now process the rest of the input
+    sort -k1
+} < 0.6.Function/0.3.AMR/tmp2 > 0.6.Function/0.3.AMR/tmp3
+
+
+#join the two files
+join -1 1 -2 1 0.6.Function/0.3.AMR/tmp3 \
+0.6.Function/0.3.AMR/amr_tpm > \
+0.6.Function/0.3.AMR/kelp.amr.genes.tpm.tsv
+
+
+#CAZy
+
+# In excel keep annotations predicted with atleast two tools and keep only column 1 and 3 
+#and then Rename genes id
+
+sed -r 's/^c_0*([0-9]*)/\1/' 0.6.Function/0.2.cazy/cazy.result.txt > \
+0.6.Function/0.2.cazy/tmp
+
+#extract matching lines
+
+
+
+#convert the files to csv
+tr '\t' ',' < 0.6.Function/0.2.cazy/tmp > \
+0.6.Function/0.2.cazy/tmp2
+
+
+tr ' ' ',' < 0.7.featurecount/tmp > \
+0.7.featurecount/tmp2
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+0.6.Function/0.2.cazy/tmp2 \
+0.7.featurecount/tmp2 \
+0.6.Function/0.2.cazy/ \
+tmp3
+
+cut -d ',' -f 3- 0.6.Function/0.2.cazy/tmp3 > \
+0.6.Function/0.2.cazy/tmp4
+
+
+#Now, Sum up TPM 
+datamash -t $',' --headers groupby 1 sum 2,3,4,5,6,7,8,9 \
+< 0.6.Function/0.2.cazy/tmp4 > 0.6.Function/0.2.cazy/kelp.cazy_tpm_summed.csv
+
+
+```
+
+
+
+#selective functions
+
+```{r}
+#add functions to ko
+#get ko information
+#Sum up TPM OF multiple locations of same function
+#-t $'\t' to specify the tab delimiter
+datamash -t $'\t' --headers groupby 1 sum 2-12 \
+< 0.6.Function/0.1.kofamscan/KO/level.3.ko.tpm > \
+0.6.Function/0.1.kofamscan/KO/level.3.ko.tpm.summed.tsv
+
+#
+
+#bacterial secretory system
+
+mkdir -p 0.6.Function/0.1.kofamscan/selective_func/
+
+  
+#secretory system
+
+join -1 1 -2 1 -o 1.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9 \
+/home/gene/metabolism/bac_secretion_system.txt \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt > \
+0.6.Function/0.1.kofamscan/selective_func/kelp.bac.sec.tsv
+
+
+#rname ko ids to amr gene annotations
+
+# Define the mapping file
+mapping_file="/home/gene/metabolism/bac_secretion_system.txt"
+
+# Loop through the input file and replace IDs
+while read old_id new_id; do
+  sed -i "s/$old_id/$new_id/g" 0.6.Function/0.1.kofamscan/selective_func/kelp.bac.sec.tsv
+done < $mapping_file
+
+
+#quorum sensing
+
+join -1 1 -2 1 -o 1.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9 \
+/home/gene/metabolism/qsqq.txt \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt > \
+0.6.Function/0.1.kofamscan/selective_func/kelp.qsqq.tsv
+
+
+#rname ko ids to amr gene annotations
+
+# Define the mapping file
+mapping_file="/home/gene/metabolism/qsqq.txt"
+
+# Loop through the input file and replace IDs
+while read old_id new_id; do
+  sed -i "s/$old_id/$new_id/g" 0.6.Function/0.1.kofamscan/selective_func/kelp.qsqq.tsv
+done < $mapping_file
+
+
+sort -k1 0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed.txt > 0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed1.txt
+
+#Bacterial toxins
+
+join -1 1 -2 1 -o 1.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9 \
+/home/gene/metabolism/bact_toxins.txt \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed1.txt > \
+0.6.Function/0.1.kofamscan/selective_func/kelp.bact.toxins.tsv
+
+
+#rname ko ids to amr gene annotations
+
+# Define the mapping file
+mapping_file="/home/gene/metabolism/bact_toxins.txt"
+
+# Loop through the input file and replace IDs
+while read old_id new_id; do
+  sed -i "s/$old_id/$new_id/g" 0.6.Function/0.1.kofamscan/selective_func/kelp.bact.toxins.tsv
+done < $mapping_file
+
+#flagella
+/home/gene/metabolism/flagella.synthesis.txt
+
+
+join -1 1 -2 1 -o 1.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9 \
+/home/gene/metabolism/flagella.synthesis.txt \
+0.6.Function/0.1.kofamscan/kelp.ko_tpm_summed1.txt > \
+0.6.Function/0.1.kofamscan/selective_func/kelp.flagella.tsv
+
+```
+
+
+
+#Diffrential gene analysis need raw reads from featurecounts
+```{r}
+#use featurecouns output file
+#delete not required columns
+
+cut -f1,7- 0.7.featurecount/all.featureCounts.txt > \
+0.7.featurecount/all.featureCounts.deseq.txt
+
+
+  
+#Add Kegg orthologs to gene-id
+
+awk '
+NR==FNR {                      
+    a[$1]=$2                    
+    next                       
+}
+{                               
+    print (($1 in a)?a[$1]:$1, $2, $3, $4, $5,$6, $7, $8, $9) 
+}' 0.6.Function/0.1.kofamscan/kelp.fixed_ko1.txt \
+0.7.featurecount/all.featureCounts.deseq.txt > \
+0.6.Function/0.1.kofamscan/kelp.rawcount_ko.txt
+
+
+#sort while keeping iheader 
+
+{
+    # grab the header and print it untouched
+    IFS= read -r header
+    echo "$header"
+    # now process the rest of the input
+    sort -k1
+} < 0.6.Function/0.1.kofamscan/kelp.rawcount_ko.txt > \
+0.6.Function/0.1.kofamscan/tmpp
+
+
+
+#Remove blanks:check and remove lines containing less than 9 strings 
+
+awk 'NF==9' 0.6.Function/0.1.kofamscan/tmpp > \
+0.6.Function/0.1.kofamscan/tmpp2
+
+
+
+#Now, Sum up counts OF multiple locations of same KO
+
+datamash -W --headers groupby 1 sum 2,3,4,5,6,7,8,9 \
+< 0.6.Function/0.1.kofamscan/tmpp2 > \
+0.6.Function/0.1.kofamscan/kelp.rawcount_ko_summed.txt
+
+
+#after deseq2 analysis
+
+#add pathway info
+
+#add KO gene and pathway information
+
+ #(requires pandas)
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+/home/gene/0.scripts/kegg.pathway.csv \
+0.6.Function/0.1.kofamscan/HKTVSUKT.deg.deseq.results.0.05.csv \
+0.6.Function/0.1.kofamscan/ \
+HKTVSUKT.deg.deseq.0.05.pathway.csv
+
+```
+
+#cazy deseq
+```{r}
+
+
+#convert the files to csv
+tr '\t' ',' < 0.7.featurecount/all.featureCounts.deseq.txt > \
+0.7.featurecount/all.featureCounts.deseq.csv
+
+#change header
+sed -i "s/Geneid/gene_id/g" 0.7.featurecount/all.featureCounts.deseq.csv
+
+
+python /home/gene/0.scripts/merge.horizontally.by.matching.first.col.py \
+0.6.Function/0.2.cazy/tmp2 \
+0.7.featurecount/all.featureCounts.deseq.csv \
+0.6.Function/0.2.cazy/ \
+tmp3
+
+cut -d ',' -f 3- 0.6.Function/0.2.cazy/tmp3 > \
+0.6.Function/0.2.cazy/tmp4
+
+
+
+#Now, Sum up TPM OF multiple locations of same KO
+
+datamash -t $',' --headers groupby 1 sum 2,3,4,5,6,7,8,9 \
+< 0.6.Function/0.2.cazy/tmp4 > 0.6.Function/0.2.cazy/kelp.deseq.rawcount.csv
+```
+
+
