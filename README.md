@@ -1,6 +1,6 @@
 # Readme
 
-This is a reproducible workflow used for amplicon,metagenomic and transcriptomics analysis.
+The scripts provided here were used to perform the amplicon, metagenomic and transcriptomics analysis.
 
 All the packages used here are the works of their respective developers and contributors and are duly cited in the representative manuscript.
 
